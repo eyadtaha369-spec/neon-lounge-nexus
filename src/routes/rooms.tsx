@@ -1,15 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import {
-  Play,
-  Square,
-  Plus,
-  Printer,
-  Crown,
-  Gamepad2,
-  DollarSign,
-  X,
-} from "lucide-react";
+import { Play, Square, Plus, Printer, Crown, Gamepad2, X } from "lucide-react";
 import {
   actions,
   fmtDuration,
@@ -308,7 +299,7 @@ function PrintModal({
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center p-4 bg-black/70 backdrop-blur-sm print:bg-white print:p-0 print:static">
-      <div className="print-receipt glass-card print:glass-none max-w-sm w-full p-6 print:shadow-none print:border-0 print:bg-white print:text-black">
+      <div className="print-receipt glass-card max-w-sm w-full p-6 print:shadow-none print:border-0 print:bg-white print:text-black">
         <div className="flex items-center justify-between mb-4 no-print">
           <h3 className="font-bold">Receipt Preview</h3>
           <button onClick={onClose} className="p-2 rounded-lg hover:bg-white/5">
@@ -388,6 +379,3 @@ function Row({
     </div>
   );
 }
-
-// silence unused
-void DollarSign;
