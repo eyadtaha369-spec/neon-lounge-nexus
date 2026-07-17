@@ -123,7 +123,8 @@ function seed(): State {
 }
 
 // ============ REACTIVE STORE ============
-let state: State = load();
+let state: State = seed();
+let hydrated = false;
 const listeners = new Set<() => void>();
 
 function load(): State {
@@ -167,6 +168,13 @@ function getServerSnapshot(): State {
 }
 
 export function useStore<T>(selector: (s: State) => T): T {
+  if (typeof window !== "undefined" && !hydrated) {
+    hydrated = true;
+    const loaded = load();
+    state = loaded;
+    // defer emit so this render uses seed (matches SSR), next tick swaps in real data
+    queueMicrotask(() => emit());
+  }
   return useSyncExternalStore(
     subscribe,
     () => selector(getSnapshot()),
