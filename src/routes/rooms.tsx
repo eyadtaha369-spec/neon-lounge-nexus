@@ -1,14 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Play, Square, Plus, Printer, Crown, Gamepad2, X } from "lucide-react";
+import { Play, Square, Plus, Printer, Crown, Gamepad2, X, AlertTriangle } from "lucide-react";
 import {
   actions,
+  findInsufficientStock,
   fmtDuration,
   roomElapsed,
   roomOrdersCost,
   roomTimeCost,
   useStore,
   type Room,
+  type State,
 } from "@/lib/store";
 
 export const Route = createFileRoute("/rooms")({
@@ -36,6 +38,7 @@ function useTicker() {
 function RoomsPage() {
   const rooms = useStore((s) => s.rooms);
   const menu = useStore((s) => s.menu);
+  const state = useStore((s) => s);
   const now = useTicker();
   const [printRoomId, setPrintRoomId] = useState<string | null>(null);
   const [addOrderRoomId, setAddOrderRoomId] = useState<string | null>(null);
@@ -73,6 +76,7 @@ function RoomsPage() {
         <OrderModal
           room={orderRoom}
           menu={menu}
+          state={state}
           onClose={() => setAddOrderRoomId(null)}
         />
       )}
@@ -238,12 +242,27 @@ function Stat({ label, value }: { label: string; value: string }) {
 function OrderModal({
   room,
   menu,
+  state,
   onClose,
 }: {
   room: Room;
   menu: { id: string; name: string; price: number }[];
+  state: State;
   onClose: () => void;
 }) {
+  const [warning, setWarning] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function handleAdd(menuId: string) {
+    setWarning(null);
+    setBusy(true);
+    const res = await actions.addOrder(room.id, menuId);
+    setBusy(false);
+    if (!res.ok) {
+      setWarning(res.reason ?? "Could not add order");
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 grid place-items-center p-4 bg-black/70 backdrop-blur-sm">
       <div className="glass-card p-6 max-w-md w-full">
@@ -262,20 +281,45 @@ function OrderModal({
             <X className="h-4 w-4" />
           </button>
         </div>
+
+        {warning && (
+          <div className="mb-3 flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+            <span>{warning}</span>
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-2">
-          {menu.map((m) => (
-            <button
-              key={m.id}
-              onClick={() => actions.addOrder(room.id, m.id)}
-              className="rounded-lg border border-border/60 p-3 text-left hover:bg-primary/10 hover:border-primary/40 transition-all"
-            >
-              <div className="font-medium">{m.name}</div>
-              <div className="text-xs text-neon-cyan mt-1">${m.price.toFixed(2)}</div>
-            </button>
-          ))}
+          {menu.map((m) => {
+            const insufficient = findInsufficientStock(state, m.id, 1);
+            const blocked = insufficient.length > 0;
+            return (
+              <button
+                key={m.id}
+                disabled={busy || blocked}
+                onClick={() => handleAdd(m.id)}
+                className={`rounded-lg border p-3 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+                  blocked
+                    ? "border-destructive/40 bg-destructive/5"
+                    : "border-border/60 hover:bg-primary/10 hover:border-primary/40"
+                }`}
+              >
+                <div className="font-medium">{m.name}</div>
+                <div className="text-xs text-neon-cyan mt-1">
+                  ${m.price.toFixed(2)}
+                </div>
+                {blocked && (
+                  <div className="text-[10px] text-destructive mt-1 flex items-center gap-1">
+                    <AlertTriangle className="h-3 w-3" />
+                    Low stock
+                  </div>
+                )}
+              </button>
+            );
+          })}
         </div>
         <div className="mt-4 text-xs text-muted-foreground text-center">
-          Tap an item to add. Close when done.
+          Tap an item to add. Items in red lack stock for the recipe.
         </div>
       </div>
     </div>

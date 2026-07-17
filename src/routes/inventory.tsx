@@ -1,7 +1,15 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo } from "react";
-import { AlertTriangle, Package, Calculator, Wallet, RotateCcw } from "lucide-react";
-import { actions, useStore } from "@/lib/store";
+import { useState } from "react";
+import {
+  AlertTriangle,
+  Package,
+  ChefHat,
+  RefreshCw,
+  X,
+  Plus,
+  Trash2,
+} from "lucide-react";
+import { actions, useStore, type RecipeLine } from "@/lib/store";
 
 export const Route = createFileRoute("/inventory")({
   head: () => ({
@@ -9,7 +17,7 @@ export const Route = createFileRoute("/inventory")({
       { title: "Inventory — GLITCH Lounge Manager" },
       {
         name: "description",
-        content: "Stock levels, recipes, end-of-day sales, and cash reconciliation.",
+        content: "Live stock levels, low-stock alerts, and recipe management.",
       },
     ],
   }),
@@ -20,16 +28,9 @@ function InventoryPage() {
   const inventory = useStore((s) => s.inventory);
   const menu = useStore((s) => s.menu);
   const recipes = useStore((s) => s.recipes);
-  const salesEntry = useStore((s) => s.salesEntry);
-  const actualCash = useStore((s) => s.actualCash);
 
-  const expectedRevenue = useMemo(
-    () =>
-      menu.reduce((a, m) => a + (salesEntry[m.id] || 0) * m.price, 0),
-    [menu, salesEntry],
-  );
-
-  const diff = actualCash - expectedRevenue;
+  const lowStock = inventory.filter((i) => i.currentStock <= i.minimumStockLevel);
+  const [editRecipeFor, setEditRecipeFor] = useState<string | null>(null);
 
   return (
     <div className="max-w-7xl mx-auto space-y-8">
@@ -42,9 +43,25 @@ function InventoryPage() {
           <span className="text-muted-foreground text-2xl">& Stock Control</span>
         </h1>
         <p className="text-muted-foreground text-sm mt-2">
-          Raw materials, recipes, automated deduction, and end-of-day cash reconciliation.
+          Live stock levels, low-stock alerts, and recipe-driven automatic
+          deduction on session close.
         </p>
       </header>
+
+      {lowStock.length > 0 && (
+        <div className="glass-card p-4 border-l-4 border-l-warning flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 text-warning shrink-0 mt-0.5" />
+          <div className="text-sm">
+            <div className="font-semibold text-warning">
+              {lowStock.length} item{lowStock.length > 1 ? "s" : ""} at or below
+              minimum stock level
+            </div>
+            <div className="text-muted-foreground mt-0.5">
+              {lowStock.map((i) => i.name).join(", ")} — restock soon.
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* STOCK TABLE */}
       <section className="glass-card p-6">
@@ -54,10 +71,10 @@ function InventoryPage() {
             <h2 className="font-semibold">Stock Inventory</h2>
           </div>
           <button
-            onClick={() => actions.resetInventoryUsage()}
+            onClick={() => actions.refreshInventory()}
             className="inline-flex items-center gap-1.5 text-xs rounded-md border border-border/60 px-2.5 py-1.5 hover:bg-white/5"
           >
-            <RotateCcw className="h-3.5 w-3.5" /> Reset usage
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
           </button>
         </div>
         <div className="overflow-x-auto">
@@ -66,16 +83,14 @@ function InventoryPage() {
               <tr className="text-left text-xs uppercase tracking-wider text-muted-foreground border-b border-border/60">
                 <th className="py-2 pr-4">Item</th>
                 <th className="py-2 pr-4">Unit</th>
-                <th className="py-2 pr-4">Initial</th>
-                <th className="py-2 pr-4">Used</th>
-                <th className="py-2 pr-4">Remaining</th>
+                <th className="py-2 pr-4">Current Stock</th>
+                <th className="py-2 pr-4">Min. Level</th>
                 <th className="py-2 pr-4">Status</th>
               </tr>
             </thead>
             <tbody>
               {inventory.map((i) => {
-                const remaining = i.initial - i.used;
-                const low = i.initial > 0 && remaining < i.initial * 0.2;
+                const low = i.currentStock <= i.minimumStockLevel;
                 return (
                   <tr key={i.id} className="border-b border-border/30 last:border-0">
                     <td className="py-3 pr-4 font-medium">{i.name}</td>
@@ -83,18 +98,32 @@ function InventoryPage() {
                     <td className="py-3 pr-4">
                       <input
                         type="number"
-                        value={i.initial}
+                        min="0"
+                        value={i.currentStock}
                         onChange={(e) =>
-                          actions.setInitialStock(i.id, Number(e.target.value) || 0)
+                          actions.setInventoryStock(
+                            i.id,
+                            Math.max(0, Number(e.target.value) || 0),
+                          )
                         }
-                        className="w-24 rounded-md bg-input border border-border/60 px-2 py-1 text-sm focus:outline-none focus:border-primary"
+                        className={`w-28 rounded-md bg-input border px-2 py-1 text-sm font-mono-display focus:outline-none focus:border-primary ${
+                          low ? "border-warning/60" : "border-border/60"
+                        }`}
                       />
                     </td>
-                    <td className="py-3 pr-4 font-mono-display text-muted-foreground">
-                      {i.used.toFixed(0)}
-                    </td>
-                    <td className={`py-3 pr-4 font-mono-display font-semibold ${low ? "text-warning" : ""}`}>
-                      {remaining.toFixed(0)}
+                    <td className="py-3 pr-4">
+                      <input
+                        type="number"
+                        min="0"
+                        value={i.minimumStockLevel}
+                        onChange={(e) =>
+                          actions.setMinimumStock(
+                            i.id,
+                            Math.max(0, Number(e.target.value) || 0),
+                          )
+                        }
+                        className="w-24 rounded-md bg-input border border-border/60 px-2 py-1 text-sm font-mono-display focus:outline-none focus:border-primary"
+                      />
                     </td>
                     <td className="py-3 pr-4">
                       {low ? (
@@ -115,7 +144,16 @@ function InventoryPage() {
 
       {/* RECIPES */}
       <section className="glass-card p-6">
-        <h2 className="font-semibold mb-4">Recipe Management</h2>
+        <div className="flex items-center gap-2 mb-4">
+          <ChefHat className="h-5 w-5 text-neon-purple" />
+          <h2 className="font-semibold">Recipe Management</h2>
+        </div>
+        <p className="text-xs text-muted-foreground mb-4">
+          Each menu item maps to inventory ingredients. When a room session is
+          closed, the database trigger automatically deducts{" "}
+          <span className="font-mono-display">quantity_needed × order qty</span>{" "}
+          from stock.
+        </p>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {menu.map((m) => {
             const lines = recipes[m.id] || [];
@@ -123,140 +161,206 @@ function InventoryPage() {
               <div key={m.id} className="rounded-lg border border-border/50 p-4">
                 <div className="flex items-center justify-between mb-3">
                   <div className="font-medium">{m.name}</div>
-                  <div className="text-xs text-neon-cyan">${m.price.toFixed(2)}</div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-neon-cyan">
+                      ${m.price.toFixed(2)}
+                    </span>
+                    <button
+                      onClick={() => setEditRecipeFor(m.id)}
+                      className="text-xs inline-flex items-center gap-1 rounded-md border border-border/60 px-2 py-1 hover:bg-white/5"
+                    >
+                      <Plus className="h-3 w-3" /> Manage
+                    </button>
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  {inventory.map((inv) => {
-                    const line = lines.find((l) => l.invId === inv.id);
-                    return (
-                      <div key={inv.id} className="grid grid-cols-[minmax(0,1fr)_80px] items-center gap-2">
-                        <div className="text-xs text-muted-foreground truncate">
-                          {inv.name} <span className="opacity-60">({inv.unit})</span>
-                        </div>
-                        <input
-                          type="number"
-                          min="0"
-                          value={line?.qty ?? 0}
-                          onChange={(e) => {
-                            const qty = Number(e.target.value) || 0;
-                            const others = lines.filter((l) => l.invId !== inv.id);
-                            const next = qty > 0 ? [...others, { invId: inv.id, qty }] : others;
-                            actions.setRecipe(m.id, next);
-                          }}
-                          className="w-full rounded-md bg-input border border-border/60 px-2 py-1 text-xs font-mono-display focus:outline-none focus:border-primary"
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
+                {lines.length === 0 ? (
+                  <div className="text-xs text-muted-foreground italic">
+                    No recipe defined.
+                  </div>
+                ) : (
+                  <ul className="space-y-1 text-xs">
+                    {lines.map((l) => {
+                      const inv = inventory.find((i) => i.id === l.invId);
+                      return (
+                        <li
+                          key={l.invId}
+                          className="flex justify-between text-muted-foreground"
+                        >
+                          <span className="truncate">{inv?.name ?? "—"}</span>
+                          <span className="font-mono-display">
+                            {l.qty} {inv?.unit}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
               </div>
             );
           })}
         </div>
       </section>
 
-      {/* SALES ENTRY */}
-      <section className="glass-card p-6">
-        <div className="flex items-center gap-2 mb-4">
-          <Calculator className="h-5 w-5 text-neon-purple" />
-          <h2 className="font-semibold">End of Day Sales Entry</h2>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-          {menu.map((m) => (
-            <div
-              key={m.id}
-              className="rounded-lg border border-border/50 p-3 grid grid-cols-[minmax(0,1fr)_80px] items-center gap-2"
-            >
-              <div>
-                <div className="font-medium text-sm">{m.name}</div>
-                <div className="text-xs text-muted-foreground">${m.price.toFixed(2)}</div>
-              </div>
-              <input
-                type="number"
-                min="0"
-                placeholder="Qty"
-                value={salesEntry[m.id] ?? ""}
-                onChange={(e) => actions.setSalesQty(m.id, Number(e.target.value) || 0)}
-                className="w-full rounded-md bg-input border border-border/60 px-2 py-2 text-sm font-mono-display focus:outline-none focus:border-primary"
-              />
-            </div>
-          ))}
-        </div>
-        <div className="mt-4 flex items-center justify-between flex-wrap gap-3">
-          <div className="text-sm text-muted-foreground">
-            Submitting deducts recipe ingredients from stock.
-          </div>
-          <button
-            onClick={() => actions.submitEndOfDay()}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary/20 border border-primary/40 px-4 py-2 text-sm font-medium hover:bg-primary/30"
-          >
-            Submit & Deduct
-          </button>
-        </div>
-      </section>
-
-      {/* RECONCILIATION */}
-      <section className="glass-card p-6">
-        <div className="flex items-center gap-2 mb-4">
-          <Wallet className="h-5 w-5 text-neon-cyan" />
-          <h2 className="font-semibold">Cash Reconciliation</h2>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="rounded-lg border border-border/50 p-4">
-            <div className="text-xs uppercase tracking-wider text-muted-foreground">
-              Expected Revenue
-            </div>
-            <div className="text-2xl font-bold font-mono-display neon-text-blue mt-2">
-              ${expectedRevenue.toFixed(2)}
-            </div>
-          </div>
-          <div className="rounded-lg border border-border/50 p-4">
-            <label className="text-xs uppercase tracking-wider text-muted-foreground">
-              Actual Cash Entered
-            </label>
-            <input
-              type="number"
-              value={actualCash || ""}
-              onChange={(e) => actions.setActualCash(Number(e.target.value) || 0)}
-              placeholder="0.00"
-              className="mt-2 w-full rounded-md bg-input border border-border/60 px-3 py-2 text-2xl font-bold font-mono-display focus:outline-none focus:border-primary"
-            />
-          </div>
-          <ReconResult diff={diff} />
-        </div>
-      </section>
+      {editRecipeFor && (
+        <RecipeModal
+          menuId={editRecipeFor}
+          menuName={menu.find((m) => m.id === editRecipeFor)?.name ?? "Recipe"}
+          inventory={inventory}
+          currentLines={recipes[editRecipeFor] || []}
+          onClose={() => setEditRecipeFor(null)}
+        />
+      )}
     </div>
   );
 }
 
-function ReconResult({ diff }: { diff: number }) {
-  const status =
-    Math.abs(diff) < 0.005 ? "balanced" : diff < 0 ? "deficit" : "surplus";
-  const color =
-    status === "deficit"
-      ? "text-destructive"
-      : status === "surplus"
-        ? "text-success"
-        : "text-muted-foreground";
-  const border =
-    status === "deficit"
-      ? "border-destructive/40"
-      : status === "surplus"
-        ? "border-success/40"
-        : "border-border/50";
-  const label =
-    status === "deficit"
-      ? "Deficit (عجز)"
-      : status === "surplus"
-        ? "Surplus (زيادة)"
-        : "Balanced";
+function RecipeModal({
+  menuId,
+  menuName,
+  inventory,
+  currentLines,
+  onClose,
+}: {
+  menuId: string;
+  menuName: string;
+  inventory: { id: string; name: string; unit: string }[];
+  currentLines: RecipeLine[];
+  onClose: () => void;
+}) {
+  const [lines, setLines] = useState<RecipeLine[]>(currentLines);
+  const [picking, setPicking] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  function addIngredient(invId: string) {
+    if (lines.some((l) => l.invId === invId)) return;
+    setLines([...lines, { invId, qty: 1 }]);
+    setPicking(false);
+  }
+
+  function updateQty(invId: string, qty: number) {
+    setLines(lines.map((l) => (l.invId === invId ? { ...l, qty } : l)));
+  }
+
+  function removeLine(invId: string) {
+    setLines(lines.filter((l) => l.invId !== invId));
+  }
+
+  async function save() {
+    setSaving(true);
+    await actions.setRecipe(menuId, lines);
+    setSaving(false);
+    onClose();
+  }
+
+  const available = inventory.filter(
+    (i) => !lines.some((l) => l.invId === i.id),
+  );
+
   return (
-    <div className={`rounded-lg border ${border} p-4`}>
-      <div className="text-xs uppercase tracking-wider text-muted-foreground">
-        {label}
-      </div>
-      <div className={`text-2xl font-bold font-mono-display mt-2 ${color}`}>
-        {status === "balanced" ? "$0.00" : `${diff < 0 ? "-" : "+"}$${Math.abs(diff).toFixed(2)}`}
+    <div className="fixed inset-0 z-50 grid place-items-center p-4 bg-black/70 backdrop-blur-sm">
+      <div className="glass-card p-6 max-w-lg w-full">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <div className="text-xs uppercase tracking-wider text-muted-foreground">
+              Manage Recipe
+            </div>
+            <h3 className="font-bold text-lg">{menuName}</h3>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-2 rounded-lg hover:bg-white/5"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+          {lines.length === 0 && (
+            <div className="text-sm text-muted-foreground italic">
+              No ingredients yet. Add one below.
+            </div>
+          )}
+          {lines.map((l) => {
+            const inv = inventory.find((i) => i.id === l.invId);
+            return (
+              <div
+                key={l.invId}
+                className="grid grid-cols-[minmax(0,1fr)_90px_36px] items-center gap-2"
+              >
+                <div className="text-sm truncate">
+                  {inv?.name ?? "—"}{" "}
+                  <span className="text-muted-foreground text-xs">
+                    ({inv?.unit})
+                  </span>
+                </div>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={l.qty}
+                  onChange={(e) =>
+                    updateQty(l.invId, Number(e.target.value) || 0)
+                  }
+                  className="w-full rounded-md bg-input border border-border/60 px-2 py-1 text-sm font-mono-display focus:outline-none focus:border-primary"
+                />
+                <button
+                  onClick={() => removeLine(l.invId)}
+                  className="grid place-items-center h-8 w-9 rounded-md border border-border/60 hover:bg-destructive/10 hover:border-destructive/40 text-muted-foreground hover:text-destructive"
+                  aria-label="Remove ingredient"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+
+        {picking ? (
+          <div className="mt-3 rounded-lg border border-border/60 p-2 max-h-40 overflow-y-auto">
+            {available.length === 0 ? (
+              <div className="text-xs text-muted-foreground px-2 py-1">
+                All inventory items already added.
+              </div>
+            ) : (
+              available.map((inv) => (
+                <button
+                  key={inv.id}
+                  onClick={() => addIngredient(inv.id)}
+                  className="w-full text-left text-sm px-2 py-1.5 rounded hover:bg-primary/10"
+                >
+                  {inv.name}{" "}
+                  <span className="text-muted-foreground text-xs">
+                    ({inv.unit})
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        ) : (
+          <button
+            onClick={() => setPicking(true)}
+            className="mt-3 inline-flex items-center gap-1.5 text-xs rounded-md border border-dashed border-border/60 px-3 py-1.5 hover:bg-white/5"
+          >
+            <Plus className="h-3.5 w-3.5" /> Add ingredient
+          </button>
+        )}
+
+        <div className="mt-6 flex gap-2 justify-end">
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-border/60 px-4 py-2 text-sm hover:bg-white/5"
+          >
+            Cancel
+          </button>
+          <button
+            disabled={saving}
+            onClick={save}
+            className="rounded-lg bg-primary/20 border border-primary/40 px-4 py-2 text-sm font-medium hover:bg-primary/30 disabled:opacity-50"
+          >
+            {saving ? "Saving…" : "Save recipe"}
+          </button>
+        </div>
       </div>
     </div>
   );

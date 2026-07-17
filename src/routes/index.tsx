@@ -48,10 +48,9 @@ function Dashboard() {
   const completedRevenue = sessions.reduce((a, s) => a + s.total, 0);
   const totalRevenue = liveRevenue + completedRevenue;
 
-  const alerts = inventory.filter((i) => {
-    const remaining = i.initial - i.used;
-    return i.initial > 0 && remaining < i.initial * 0.2;
-  });
+  const alerts = inventory.filter(
+    (i) => i.currentStock <= i.minimumStockLevel,
+  );
 
   const chartData = rooms.map((r) => {
     const done = sessions

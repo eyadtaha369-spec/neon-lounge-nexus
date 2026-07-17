@@ -1,8 +1,15 @@
 import { useSyncExternalStore } from "react";
+import { supabase } from "./supabase";
 
 // ============ TYPES ============
 export type MenuItem = { id: string; name: string; price: number };
-export type OrderLine = { menuId: string; name: string; price: number; qty: number };
+export type OrderLine = {
+  id: string;
+  menuId: string;
+  name: string;
+  price: number;
+  qty: number;
+};
 export type CompletedSession = {
   id: string;
   roomId: string;
@@ -28,8 +35,8 @@ export type InventoryItem = {
   id: string;
   name: string;
   unit: string;
-  initial: number;
-  used: number; // from End-of-Day + room orders
+  currentStock: number;
+  minimumStockLevel: number;
 };
 export type RecipeLine = { invId: string; qty: number };
 export type Recipes = Record<string, RecipeLine[]>; // menuId -> lines
@@ -47,111 +54,71 @@ export type State = {
   recipes: Recipes;
   sessions: CompletedSession[];
   activity: Activity[];
-  salesEntry: Record<string, number>; // menuId -> qty
-  actualCash: number;
 };
 
-const STORAGE_KEY = "glitch-lounge-v1";
-
-// ============ SEED ============
-function seed(): State {
-  const menu: MenuItem[] = [
-    { id: "espresso", name: "Espresso", price: 3 },
-    { id: "latte", name: "Latte", price: 4.5 },
-    { id: "lemonade", name: "Lemonade", price: 3.5 },
-    { id: "soda", name: "Soda", price: 2 },
-    { id: "chips", name: "Chips", price: 3 },
-    { id: "water", name: "Water", price: 1.5 },
-  ];
-
-  const rooms: Room[] = Array.from({ length: 8 }).map((_, i) => ({
-    id: `room-${i + 1}`,
-    name: `Room ${i + 1}`,
-    isVIP: false,
-    hourlyRate: 5,
-    status: "available",
-    startedAt: null,
-    orders: [],
-    splitBill: false,
-  }));
-  rooms.push({
-    id: "room-vip",
-    name: "VIP",
-    isVIP: true,
-    hourlyRate: 10,
-    status: "available",
-    startedAt: null,
-    orders: [],
-    splitBill: false,
-  });
-
-  const inventory: InventoryItem[] = [
-    { id: "beans", name: "Espresso Beans", unit: "g", initial: 1000, used: 0 },
-    { id: "milk", name: "Milk", unit: "ml", initial: 5000, used: 0 },
-    { id: "sugar", name: "Sugar", unit: "g", initial: 2000, used: 0 },
-    { id: "lemon", name: "Lemon", unit: "pcs", initial: 40, used: 0 },
-    { id: "soda-cans", name: "Soda Cans", unit: "units", initial: 60, used: 0 },
-    { id: "chips-bags", name: "Chips Bags", unit: "units", initial: 40, used: 0 },
-    { id: "water-bottles", name: "Water Bottles", unit: "units", initial: 80, used: 0 },
-  ];
-
-  const recipes: Recipes = {
-    espresso: [{ invId: "beans", qty: 18 }],
-    latte: [
-      { invId: "beans", qty: 18 },
-      { invId: "milk", qty: 200 },
-    ],
-    lemonade: [
-      { invId: "lemon", qty: 2 },
-      { invId: "sugar", qty: 20 },
-    ],
-    soda: [{ invId: "soda-cans", qty: 1 }],
-    chips: [{ invId: "chips-bags", qty: 1 }],
-    water: [{ invId: "water-bottles", qty: 1 }],
-  };
-
-  return {
-    rooms,
-    menu,
-    inventory,
-    recipes,
-    sessions: [],
-    activity: [],
-    salesEntry: {},
-    actualCash: 0,
-  };
-}
+// ============ DB ROW TYPES ============
+type DbRoom = {
+  id: string;
+  name: string;
+  is_vip: boolean;
+  hourly_rate: number;
+  status: "available" | "active";
+  started_at: string | null;
+  split_bill: boolean;
+};
+type DbOrder = {
+  id: string;
+  room_id: string;
+  menu_item_id: string;
+  name: string;
+  price: number;
+  qty: number;
+};
+type DbInventory = {
+  id: string;
+  name: string;
+  unit: string;
+  current_stock: number;
+  minimum_stock_level: number;
+};
+type DbMenuItem = {
+  id: string;
+  name: string;
+  price: number;
+};
+type DbRecipe = {
+  id: string;
+  menu_item_id: string;
+  inventory_item_id: string;
+  quantity_needed: number;
+};
+type DbSession = {
+  id: string;
+  room_id: string;
+  room_name: string;
+  started_at: string;
+  ended_at: string;
+  seconds: number;
+  time_cost: number;
+  orders_cost: number;
+  total: number;
+};
 
 // ============ REACTIVE STORE ============
-let state: State = seed();
-let hydrated = false;
+let state: State = emptyState();
+let loaded = false;
+let loadingPromise: Promise<void> | null = null;
 const listeners = new Set<() => void>();
 
-function load(): State {
-  if (typeof window === "undefined") return seed();
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return seed();
-    const parsed = JSON.parse(raw) as Partial<State>;
-    const s = seed();
-    return { ...s, ...parsed };
-  } catch {
-    return seed();
-  }
-}
-
-function persist() {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch {
-    /* ignore */
-  }
-}
-
-function emit() {
-  persist();
-  listeners.forEach((l) => l());
+function emptyState(): State {
+  return {
+    rooms: [],
+    menu: [],
+    inventory: [],
+    recipes: {},
+    sessions: [],
+    activity: [],
+  };
 }
 
 function subscribe(l: () => void) {
@@ -167,13 +134,124 @@ function getServerSnapshot(): State {
   return state;
 }
 
+function emit() {
+  listeners.forEach((l) => l());
+}
+
+function setState(next: State) {
+  state = next;
+  emit();
+}
+
+// ============ LOAD ============
+async function loadAll(): Promise<State> {
+  const [roomsR, ordersR, menuR, invR, recipesR, sessionsR] = await Promise.all([
+    supabase.from("rooms").select("*"),
+    supabase.from("room_orders").select("*"),
+    supabase.from("menu_items").select("*"),
+    supabase.from("inventory_items").select("*"),
+    supabase.from("menu_item_ingredients").select("*"),
+    supabase
+      .from("sessions")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(50),
+  ]);
+
+  if (roomsR.error) throw roomsR.error;
+  if (ordersR.error) throw ordersR.error;
+  if (menuR.error) throw menuR.error;
+  if (invR.error) throw invR.error;
+  if (recipesR.error) throw recipesR.error;
+  if (sessionsR.error) throw sessionsR.error;
+
+  const rooms = (roomsR.data as DbRoom[]).map(mapRoom);
+  const orders = ordersR.data as DbOrder[];
+  const menu = (menuR.data as DbMenuItem[]).map((m) => ({
+    id: m.id,
+    name: m.name,
+    price: Number(m.price),
+  }));
+  const inventory = (invR.data as DbInventory[]).map((i) => ({
+    id: i.id,
+    name: i.name,
+    unit: i.unit,
+    currentStock: Number(i.current_stock),
+    minimumStockLevel: Number(i.minimum_stock_level),
+  }));
+  const recipes: Recipes = {};
+  for (const r of recipesR.data as DbRecipe[]) {
+    const arr = recipes[r.menu_item_id] ?? [];
+    arr.push({ invId: r.inventory_item_id, qty: Number(r.quantity_needed) });
+    recipes[r.menu_item_id] = arr;
+  }
+  const sessions = (sessionsR.data as DbSession[]).map((s) => ({
+    id: s.id,
+    roomId: s.room_id,
+    roomName: s.room_name,
+    startedAt: new Date(s.started_at).getTime(),
+    endedAt: new Date(s.ended_at).getTime(),
+    seconds: s.seconds,
+    timeCost: Number(s.time_cost),
+    ordersCost: Number(s.orders_cost),
+    total: Number(s.total),
+  }));
+
+  for (const r of rooms) {
+    r.orders = orders
+      .filter((o) => o.room_id === r.id)
+      .map((o) => ({
+        id: o.id,
+        menuId: o.menu_item_id,
+        name: o.name,
+        price: Number(o.price),
+        qty: o.qty,
+      }));
+  }
+
+  return { rooms, menu, inventory, recipes, sessions, activity: state.activity };
+}
+
+function mapRoom(r: DbRoom): Room {
+  return {
+    id: r.id,
+    name: r.name,
+    isVIP: r.is_vip,
+    hourlyRate: Number(r.hourly_rate),
+    status: r.status,
+    startedAt: r.started_at ? new Date(r.started_at).getTime() : null,
+    orders: [],
+    splitBill: r.split_bill,
+  };
+}
+
+async function ensureLoaded() {
+  if (loaded) return;
+  if (!loadingPromise) {
+    loadingPromise = (async () => {
+      try {
+        state = await loadAll();
+        loaded = true;
+        emit();
+      } catch (err) {
+        console.error("Failed to load from Supabase:", err);
+        loadingPromise = null;
+        throw err;
+      }
+    })();
+  }
+  return loadingPromise;
+}
+
+if (typeof window !== "undefined") {
+  ensureLoaded().catch(() => {
+    /* surfaced in console */
+  });
+}
+
 export function useStore<T>(selector: (s: State) => T): T {
-  if (typeof window !== "undefined" && !hydrated) {
-    hydrated = true;
-    const loaded = load();
-    state = loaded;
-    // defer emit so this render uses seed (matches SSR), next tick swaps in real data
-    queueMicrotask(() => emit());
+  if (typeof window !== "undefined" && !loaded && !loadingPromise) {
+    ensureLoaded().catch(() => {});
   }
   return useSyncExternalStore(
     subscribe,
@@ -182,141 +260,7 @@ export function useStore<T>(selector: (s: State) => T): T {
   );
 }
 
-function setState(mut: (s: State) => State) {
-  state = mut(state);
-  emit();
-}
-
-// ============ ACTIONS ============
-function logActivity(text: string, kind: Activity["kind"]) {
-  const a: Activity = { id: `${Date.now()}-${Math.random()}`, ts: Date.now(), text, kind };
-  state.activity = [a, ...state.activity].slice(0, 30);
-}
-
-export const actions = {
-  startRoom(roomId: string) {
-    setState((s) => ({
-      ...s,
-      rooms: s.rooms.map((r) =>
-        r.id === roomId ? { ...r, status: "active", startedAt: Date.now() } : r,
-      ),
-    }));
-    const r = state.rooms.find((x) => x.id === roomId)!;
-    logActivity(`${r.name} session started`, "start");
-    emit();
-  },
-  endRoom(roomId: string) {
-    const room = state.rooms.find((r) => r.id === roomId);
-    if (!room || !room.startedAt) return;
-    const endedAt = Date.now();
-    const seconds = Math.floor((endedAt - room.startedAt) / 1000);
-    const timeCost = (seconds / 3600) * room.hourlyRate;
-    const ordersCost = room.orders.reduce((a, o) => a + o.price * o.qty, 0);
-    const session: CompletedSession = {
-      id: `s-${endedAt}-${roomId}`,
-      roomId,
-      roomName: room.name,
-      startedAt: room.startedAt,
-      endedAt,
-      seconds,
-      timeCost,
-      ordersCost,
-      total: timeCost + ordersCost,
-    };
-    // deduct inventory for orders in this session
-    const invDelta: Record<string, number> = {};
-    for (const o of room.orders) {
-      const recipe = state.recipes[o.menuId];
-      if (!recipe) continue;
-      for (const line of recipe) {
-        invDelta[line.invId] = (invDelta[line.invId] || 0) + line.qty * o.qty;
-      }
-    }
-    setState((s) => ({
-      ...s,
-      sessions: [session, ...s.sessions],
-      inventory: s.inventory.map((i) =>
-        invDelta[i.id] ? { ...i, used: i.used + invDelta[i.id] } : i,
-      ),
-      rooms: s.rooms.map((r) =>
-        r.id === roomId
-          ? { ...r, status: "available", startedAt: null, orders: [], splitBill: false }
-          : r,
-      ),
-    }));
-    logActivity(`${room.name} closed — $${session.total.toFixed(2)}`, "end");
-    emit();
-  },
-  addOrder(roomId: string, menuId: string) {
-    const item = state.menu.find((m) => m.id === menuId);
-    if (!item) return;
-    setState((s) => ({
-      ...s,
-      rooms: s.rooms.map((r) => {
-        if (r.id !== roomId) return r;
-        const existing = r.orders.find((o) => o.menuId === menuId);
-        const orders = existing
-          ? r.orders.map((o) => (o.menuId === menuId ? { ...o, qty: o.qty + 1 } : o))
-          : [...r.orders, { menuId, name: item.name, price: item.price, qty: 1 }];
-        return { ...r, orders };
-      }),
-    }));
-    const r = state.rooms.find((x) => x.id === roomId)!;
-    logActivity(`${r.name} + ${item.name}`, "order");
-    emit();
-  },
-  toggleSplit(roomId: string) {
-    setState((s) => ({
-      ...s,
-      rooms: s.rooms.map((r) => (r.id === roomId ? { ...r, splitBill: !r.splitBill } : r)),
-    }));
-  },
-  setHourlyRate(roomId: string, rate: number) {
-    setState((s) => ({
-      ...s,
-      rooms: s.rooms.map((r) => (r.id === roomId ? { ...r, hourlyRate: rate } : r)),
-    }));
-  },
-  setInitialStock(invId: string, initial: number) {
-    setState((s) => ({
-      ...s,
-      inventory: s.inventory.map((i) => (i.id === invId ? { ...i, initial } : i)),
-    }));
-  },
-  setRecipe(menuId: string, lines: RecipeLine[]) {
-    setState((s) => ({ ...s, recipes: { ...s.recipes, [menuId]: lines } }));
-  },
-  setSalesQty(menuId: string, qty: number) {
-    setState((s) => ({ ...s, salesEntry: { ...s.salesEntry, [menuId]: qty } }));
-  },
-  submitEndOfDay() {
-    // deduct inventory based on salesEntry
-    const invDelta: Record<string, number> = {};
-    for (const [menuId, qty] of Object.entries(state.salesEntry)) {
-      if (!qty) continue;
-      const recipe = state.recipes[menuId];
-      if (!recipe) continue;
-      for (const line of recipe) {
-        invDelta[line.invId] = (invDelta[line.invId] || 0) + line.qty * qty;
-      }
-    }
-    setState((s) => ({
-      ...s,
-      inventory: s.inventory.map((i) =>
-        invDelta[i.id] ? { ...i, used: i.used + invDelta[i.id] } : i,
-      ),
-      salesEntry: {},
-    }));
-  },
-  setActualCash(v: number) {
-    setState((s) => ({ ...s, actualCash: v }));
-  },
-  resetInventoryUsage() {
-    setState((s) => ({ ...s, inventory: s.inventory.map((i) => ({ ...i, used: 0 })) }));
-  },
-};
-
-// ============ HELPERS ============
+// ============ HELPERS (pure) ============
 export function roomElapsed(r: Room, now: number): number {
   if (r.status !== "active" || !r.startedAt) return 0;
   return Math.floor((now - r.startedAt) / 1000);
@@ -333,4 +277,267 @@ export function roomTimeCost(r: Room, now: number): number {
 }
 export function roomOrdersCost(r: Room): number {
   return r.orders.reduce((a, o) => a + o.price * o.qty, 0);
+}
+
+// ============ STOCK VALIDATION ============
+// Total demand for each inventory item given a candidate order (menuId + qty)
+// on top of all currently in-flight active room orders.
+export function computeOrderDemand(
+  s: State,
+  menuId: string,
+  qty: number,
+): Record<string, number> {
+  const demand: Record<string, number> = {};
+  const add = (invId: string, n: number) => {
+    demand[invId] = (demand[invId] || 0) + n;
+  };
+  for (const r of s.rooms) {
+    if (r.status !== "active") continue;
+    for (const o of r.orders) {
+      const recipe = s.recipes[o.menuId];
+      if (!recipe) continue;
+      for (const line of recipe) add(line.invId, line.qty * o.qty);
+    }
+  }
+  const recipe = s.recipes[menuId];
+  if (recipe) for (const line of recipe) add(line.invId, line.qty * qty);
+  return demand;
+}
+
+export function findInsufficientStock(
+  s: State,
+  menuId: string,
+  qty: number,
+): { invId: string; name: string; need: number; have: number }[] {
+  const demand = computeOrderDemand(s, menuId, qty);
+  const out: { invId: string; name: string; need: number; have: number }[] = [];
+  for (const [invId, need] of Object.entries(demand)) {
+    const inv = s.inventory.find((i) => i.id === invId);
+    if (!inv) continue;
+    if (need > inv.currentStock) {
+      out.push({ invId, name: inv.name, need, have: inv.currentStock });
+    }
+  }
+  return out;
+}
+
+// ============ ACTIONS ============
+function logActivity(text: string, kind: Activity["kind"]) {
+  const a: Activity = {
+    id: `${Date.now()}-${Math.random()}`,
+    ts: Date.now(),
+    text,
+    kind,
+  };
+  state = { ...state, activity: [a, ...state.activity].slice(0, 30) };
+  emit();
+}
+
+export const actions = {
+  async startRoom(roomId: string) {
+    const now = new Date().toISOString();
+    const { error } = await supabase
+      .from("rooms")
+      .update({ status: "active", started_at: now })
+      .eq("id", roomId);
+    if (error) {
+      console.error("startRoom failed", error);
+      return;
+    }
+    const room = state.rooms.find((r) => r.id === roomId);
+    setState({
+      ...state,
+      rooms: state.rooms.map((r) =>
+        r.id === roomId
+          ? { ...r, status: "active", startedAt: Date.now() }
+          : r,
+      ),
+    });
+    if (room) logActivity(`${room.name} session started`, "start");
+  },
+
+  async endRoom(roomId: string) {
+    const room = state.rooms.find((r) => r.id === roomId);
+    if (!room || !room.startedAt) return;
+    const endedAt = Date.now();
+    const seconds = Math.floor((endedAt - room.startedAt) / 1000);
+    const timeCost = (seconds / 3600) * room.hourlyRate;
+    const ordersCost = roomOrdersCost(room);
+    const total = timeCost + ordersCost;
+
+    // Inserting a session row fires the DB trigger, which atomically deducts
+    // recipe ingredients from inventory and clears this room's orders.
+    const { error } = await supabase.from("sessions").insert({
+      room_id: roomId,
+      room_name: room.name,
+      started_at: new Date(room.startedAt).toISOString(),
+      ended_at: new Date(endedAt).toISOString(),
+      seconds,
+      time_cost: timeCost,
+      orders_cost: ordersCost,
+      total,
+    });
+
+    if (error) {
+      console.error("endRoom failed", error);
+      return;
+    }
+
+    await supabase
+      .from("rooms")
+      .update({ status: "available", started_at: null, split_bill: false })
+      .eq("id", roomId);
+
+    await refreshAll();
+    logActivity(`${room.name} closed — $${total.toFixed(2)}`, "end");
+  },
+
+  async addOrder(
+    roomId: string,
+    menuId: string,
+    qty = 1,
+  ): Promise<{ ok: boolean; reason?: string }> {
+    const item = state.menu.find((m) => m.id === menuId);
+    if (!item) return { ok: false, reason: "Unknown menu item" };
+
+    const insufficient = findInsufficientStock(state, menuId, qty);
+    if (insufficient.length > 0) {
+      const names = insufficient.map((i) => i.name).join(", ");
+      return { ok: false, reason: `Insufficient stock: ${names}` };
+    }
+
+    const { data, error } = await supabase
+      .from("room_orders")
+      .insert({
+        room_id: roomId,
+        menu_item_id: menuId,
+        name: item.name,
+        price: item.price,
+        qty,
+      })
+      .select("id")
+      .single();
+
+    if (error) {
+      console.error("addOrder failed", error);
+      return { ok: false, reason: error.message };
+    }
+
+    const orderLine: OrderLine = {
+      id: data.id,
+      menuId,
+      name: item.name,
+      price: item.price,
+      qty,
+    };
+    setState({
+      ...state,
+      rooms: state.rooms.map((r) =>
+        r.id === roomId ? { ...r, orders: [...r.orders, orderLine] } : r,
+      ),
+    });
+    const room = state.rooms.find((r) => r.id === roomId);
+    if (room) logActivity(`${room.name} + ${item.name}`, "order");
+    return { ok: true };
+  },
+
+  async toggleSplit(roomId: string) {
+    const room = state.rooms.find((r) => r.id === roomId);
+    if (!room) return;
+    const next = !room.splitBill;
+    await supabase.from("rooms").update({ split_bill: next }).eq("id", roomId);
+    setState({
+      ...state,
+      rooms: state.rooms.map((r) =>
+        r.id === roomId ? { ...r, splitBill: next } : r,
+      ),
+    });
+  },
+
+  async setHourlyRate(roomId: string, rate: number) {
+    await supabase.from("rooms").update({ hourly_rate: rate }).eq("id", roomId);
+    setState({
+      ...state,
+      rooms: state.rooms.map((r) =>
+        r.id === roomId ? { ...r, hourlyRate: rate } : r,
+      ),
+    });
+  },
+
+  async setInventoryStock(
+    invId: string,
+    currentStock: number,
+    minimumStockLevel?: number,
+  ) {
+    const patch: Record<string, number> = { current_stock: currentStock };
+    if (minimumStockLevel !== undefined)
+      patch.minimum_stock_level = minimumStockLevel;
+    await supabase.from("inventory_items").update(patch).eq("id", invId);
+    setState({
+      ...state,
+      inventory: state.inventory.map((i) =>
+        i.id === invId
+          ? {
+              ...i,
+              currentStock,
+              minimumStockLevel: minimumStockLevel ?? i.minimumStockLevel,
+            }
+          : i,
+      ),
+    });
+  },
+
+  async setMinimumStock(invId: string, minimumStockLevel: number) {
+    await supabase
+      .from("inventory_items")
+      .update({ minimum_stock_level: minimumStockLevel })
+      .eq("id", invId);
+    setState({
+      ...state,
+      inventory: state.inventory.map((i) =>
+        i.id === invId ? { ...i, minimumStockLevel } : i,
+      ),
+    });
+  },
+
+  async setRecipe(menuId: string, lines: RecipeLine[]) {
+    await supabase
+      .from("menu_item_ingredients")
+      .delete()
+      .eq("menu_item_id", menuId);
+    if (lines.length > 0) {
+      await supabase.from("menu_item_ingredients").insert(
+        lines.map((l) => ({
+          menu_item_id: menuId,
+          inventory_item_id: l.invId,
+          quantity_needed: l.qty,
+        })),
+      );
+    }
+    setState({ ...state, recipes: { ...state.recipes, [menuId]: lines } });
+  },
+
+  async refreshInventory() {
+    const { data, error } = await supabase
+      .from("inventory_items")
+      .select("*");
+    if (error || !data) return;
+    const inv = (data as DbInventory[]).map((i) => ({
+      id: i.id,
+      name: i.name,
+      unit: i.unit,
+      currentStock: Number(i.current_stock),
+      minimumStockLevel: Number(i.minimum_stock_level),
+    }));
+    setState({ ...state, inventory: inv });
+  },
+};
+
+async function refreshAll() {
+  try {
+    state = await loadAll();
+    emit();
+  } catch (err) {
+    console.error("refreshAll failed", err);
+  }
 }
