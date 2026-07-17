@@ -675,8 +675,9 @@ export const actions = {
   },
 
   async snapshotMonth(month: string): Promise<{ ok: boolean; count?: number; reason?: string }> {
+    const monthStart = `${month}-01`;
     const { data, error } = await supabase.rpc("snapshot_inventory_for_month", {
-      p_month: month,
+      p_month: monthStart,
     });
     if (error) return { ok: false, reason: error.message };
     return { ok: true, count: Number(data) };
