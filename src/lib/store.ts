@@ -54,6 +54,8 @@ export type State = {
   recipes: Recipes;
   sessions: CompletedSession[];
   activity: Activity[];
+  salesLog: SalesLogEntry[];
+  dailyCash: DailyCash | null;
 };
 
 // ============ DB ROW TYPES ============
@@ -103,6 +105,38 @@ type DbSession = {
   orders_cost: number;
   total: number;
 };
+type DbSalesLog = {
+  id: string;
+  menu_item_id: string | null;
+  menu_item_name: string;
+  qty: number;
+  unit_price: number;
+  total: number;
+  room_id: string | null;
+  room_name: string;
+  session_id: string | null;
+  sold_at: string;
+};
+type DbDailyCash = {
+  id: string;
+  day: string;
+  actual_cash: number;
+  updated_at: string;
+};
+export type SalesLogEntry = {
+  id: string;
+  menuItemId: string | null;
+  menuItemName: string;
+  qty: number;
+  unitPrice: number;
+  total: number;
+  roomName: string;
+  soldAt: number; // epoch ms
+};
+export type DailyCash = {
+  day: string; // YYYY-MM-DD
+  actualCash: number;
+};
 
 // ============ REACTIVE STORE ============
 let state: State = emptyState();
@@ -118,6 +152,8 @@ function emptyState(): State {
     recipes: {},
     sessions: [],
     activity: [],
+    salesLog: [],
+    dailyCash: null,
   };
 }
 
@@ -145,18 +181,27 @@ function setState(next: State) {
 
 // ============ LOAD ============
 async function loadAll(): Promise<State> {
-  const [roomsR, ordersR, menuR, invR, recipesR, sessionsR] = await Promise.all([
-    supabase.from("rooms").select("*"),
-    supabase.from("room_orders").select("*"),
-    supabase.from("menu_items").select("*"),
-    supabase.from("inventory_items").select("*"),
-    supabase.from("menu_item_ingredients").select("*"),
-    supabase
-      .from("sessions")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(50),
-  ]);
+  const today = new Date().toISOString().slice(0, 10);
+  const [roomsR, ordersR, menuR, invR, recipesR, sessionsR, salesR, cashR] =
+    await Promise.all([
+      supabase.from("rooms").select("*"),
+      supabase.from("room_orders").select("*"),
+      supabase.from("menu_items").select("*"),
+      supabase.from("inventory_items").select("*"),
+      supabase.from("menu_item_ingredients").select("*"),
+      supabase
+        .from("sessions")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(50),
+      supabase
+        .from("sales_log")
+        .select("*")
+        .gte("sold_at", `${today}T00:00:00`)
+        .lte("sold_at", `${today}T23:59:59.999`)
+        .order("sold_at", { ascending: false }),
+      supabase.from("daily_cash").select("*").eq("day", today).maybeSingle(),
+    ]);
 
   if (roomsR.error) throw roomsR.error;
   if (ordersR.error) throw ordersR.error;
@@ -164,6 +209,8 @@ async function loadAll(): Promise<State> {
   if (invR.error) throw invR.error;
   if (recipesR.error) throw recipesR.error;
   if (sessionsR.error) throw sessionsR.error;
+  if (salesR.error) throw salesR.error;
+  if (cashR.error) throw cashR.error;
 
   const rooms = (roomsR.data as DbRoom[]).map(mapRoom);
   const orders = ordersR.data as DbOrder[];
@@ -209,7 +256,33 @@ async function loadAll(): Promise<State> {
       }));
   }
 
-  return { rooms, menu, inventory, recipes, sessions, activity: state.activity };
+  const salesLog = (salesR.data as DbSalesLog[] | null ?? []).map((s) => ({
+    id: s.id,
+    menuItemId: s.menu_item_id,
+    menuItemName: s.menu_item_name,
+    qty: s.qty,
+    unitPrice: Number(s.unit_price),
+    total: Number(s.total),
+    roomName: s.room_name,
+    soldAt: new Date(s.sold_at).getTime(),
+  }));
+  const dailyCash = cashR.data
+    ? {
+        day: (cashR.data as DbDailyCash).day,
+        actualCash: Number((cashR.data as DbDailyCash).actual_cash),
+      }
+    : null;
+
+  return {
+    rooms,
+    menu,
+    inventory,
+    recipes,
+    sessions,
+    activity: state.activity,
+    salesLog,
+    dailyCash,
+  };
 }
 
 function mapRoom(r: DbRoom): Room {
@@ -389,6 +462,7 @@ export const actions = {
       .eq("id", roomId);
 
     await refreshAll();
+    await actions.refreshSalesLog();
     logActivity(`${room.name} closed — $${total.toFixed(2)}`, "end");
   },
 
@@ -530,6 +604,114 @@ export const actions = {
       minimumStockLevel: Number(i.minimum_stock_level),
     }));
     setState({ ...state, inventory: inv });
+  },
+
+  async addMenuItem(
+    name: string,
+    price: number,
+    recipeLines: RecipeLine[],
+  ): Promise<{ ok: boolean; reason?: string; id?: string }> {
+    if (!name.trim()) return { ok: false, reason: "Name is required" };
+    if (price < 0) return { ok: false, reason: "Price must be ≥ 0" };
+
+    const { data, error } = await supabase
+      .from("menu_items")
+      .insert({ name: name.trim(), price })
+      .select("id, name, price")
+      .single();
+
+    if (error) {
+      return { ok: false, reason: error.message };
+    }
+
+    const newMenu: MenuItem = {
+      id: data.id,
+      name: data.name,
+      price: Number(data.price),
+    };
+
+    if (recipeLines.length > 0) {
+      const { error: rErr } = await supabase
+        .from("menu_item_ingredients")
+        .insert(
+          recipeLines.map((l) => ({
+            menu_item_id: data.id,
+            inventory_item_id: l.invId,
+            quantity_needed: l.qty,
+          })),
+        );
+      if (rErr) {
+        return { ok: false, reason: rErr.message, id: data.id };
+      }
+    }
+
+    setState({
+      ...state,
+      menu: [...state.menu, newMenu],
+      recipes: { ...state.recipes, [data.id]: recipeLines },
+    });
+    return { ok: true, id: data.id };
+  },
+
+  async setActualCash(actualCash: number) {
+    const today = new Date().toISOString().slice(0, 10);
+    const { data, error } = await supabase
+      .from("daily_cash")
+      .upsert(
+        { day: today, actual_cash: actualCash, updated_at: new Date().toISOString() },
+        { onConflict: "day" },
+      )
+      .select("day, actual_cash")
+      .single();
+
+    if (error) {
+      console.error("setActualCash failed", error);
+      return;
+    }
+    setState({
+      ...state,
+      dailyCash: { day: data.day, actualCash: Number(data.actual_cash) },
+    });
+  },
+
+  async snapshotMonth(month: string): Promise<{ ok: boolean; count?: number; reason?: string }> {
+    const { data, error } = await supabase.rpc("snapshot_inventory_for_month", {
+      p_month: month,
+    });
+    if (error) return { ok: false, reason: error.message };
+    return { ok: true, count: Number(data) };
+  },
+
+  async getMonthlySnapshot(month: string) {
+    const monthStart = `${month}-01`;
+    const { data, error } = await supabase
+      .from("inventory_snapshots")
+      .select("*")
+      .eq("month", monthStart);
+    if (error) return null;
+    return data;
+  },
+
+  async refreshSalesLog() {
+    const today = new Date().toISOString().slice(0, 10);
+    const { data, error } = await supabase
+      .from("sales_log")
+      .select("*")
+      .gte("sold_at", `${today}T00:00:00`)
+      .lte("sold_at", `${today}T23:59:59.999`)
+      .order("sold_at", { ascending: false });
+    if (error || !data) return;
+    const salesLog = (data as DbSalesLog[]).map((s) => ({
+      id: s.id,
+      menuItemId: s.menu_item_id,
+      menuItemName: s.menu_item_name,
+      qty: s.qty,
+      unitPrice: Number(s.unit_price),
+      total: Number(s.total),
+      roomName: s.room_name,
+      soldAt: new Date(s.sold_at).getTime(),
+    }));
+    setState({ ...state, salesLog });
   },
 };
 
