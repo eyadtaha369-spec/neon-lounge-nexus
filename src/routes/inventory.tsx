@@ -1,14 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
-import {
-  AlertTriangle,
-  Package,
-  ChefHat,
-  RefreshCw,
-  X,
-  Plus,
-  Trash2,
-} from "lucide-react";
+import { TriangleAlert as AlertTriangle, Package, ChefHat, RefreshCw, X, Plus, Trash2 } from "lucide-react";
 import { actions, useStore, type RecipeLine } from "@/lib/store";
 
 export const Route = createFileRoute("/inventory")({

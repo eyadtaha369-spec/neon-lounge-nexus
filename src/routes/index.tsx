@@ -1,12 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import {
-  Activity as ActivityIcon,
-  DollarSign,
-  Gamepad2,
-  AlertTriangle,
-  TrendingUp,
-} from "lucide-react";
+import { Activity as ActivityIcon, DollarSign, Gamepad2, TriangleAlert as AlertTriangle, TrendingUp } from "lucide-react";
 import {
   Bar,
   BarChart,

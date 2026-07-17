@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Play, Square, Plus, Printer, Crown, Gamepad2, X, AlertTriangle } from "lucide-react";
+import { Play, Square, Plus, Printer, Crown, Gamepad2, X, TriangleAlert as AlertTriangle } from "lucide-react";
 import {
   actions,
   findInsufficientStock,
