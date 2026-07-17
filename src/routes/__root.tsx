@@ -85,13 +85,17 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
           "Run a PlayStation gaming lounge: live room timers, orders, inventory, recipes, and end-of-day reconciliation.",
       },
       { name: "author", content: "GLITCH" },
-      { property: "og:title", content: "GLITCH Lounge Manager" },
+      { property: "og:title", content: "GLITCH Lounge Manager — PlayStation Gaming Lounge System" },
       {
         property: "og:description",
-        content: "PlayStation gaming lounge management — rooms, orders, inventory.",
+        content: "Run a PlayStation gaming lounge: live room timers, orders, inventory, recipes, and end-of-day reconciliation.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
+      { name: "twitter:title", content: "GLITCH Lounge Manager — PlayStation Gaming Lounge System" },
+      { name: "twitter:description", content: "Run a PlayStation gaming lounge: live room timers, orders, inventory, recipes, and end-of-day reconciliation." },
+      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/8e45b92a-f4b4-42ae-9f58-830566ac4069/id-preview-826da9b6--1933169b-449e-4e92-9de1-d07b5f945067.lovable.app-1784250543008.png" },
+      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/8e45b92a-f4b4-42ae-9f58-830566ac4069/id-preview-826da9b6--1933169b-449e-4e92-9de1-d07b5f945067.lovable.app-1784250543008.png" },
     ],
     links: [
       {
